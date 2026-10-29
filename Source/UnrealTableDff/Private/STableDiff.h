@@ -8,6 +8,10 @@
 #include "Widgets/Views/SListView.h"
 #include "Widgets/Views/STreeView.h"
 
+class FTableDiffPropertyNode;
+class STableDiffStructureTree;
+class SWidgetSwitcher;
+
 class ITableRow;
 class SHeaderRow;
 class SMultiLineEditableText;
@@ -49,6 +53,13 @@ private:
 	void OnNewSelectionChanged(TSharedPtr<FTableDiffAlignedRow> Row, ESelectInfo::Type SelectInfo);
 	void OnTableSelectionChanged(TSharedPtr<FTableDiffAlignedRow> Row, ESelectInfo::Type SelectInfo, ETableDiffSide Side);
 
+	void ShowGridView();
+	void ShowStructureView();
+	bool IsGridView() const;
+	bool IsStructureView() const;
+	void OnStructureNodeSelected(TSharedPtr<FTableDiffPropertyNode> Node);
+	void SelectDiffForField(FName RowName, const FString& FieldPath);
+
 	void OnFilterTextChanged(const FText& NewText);
 	void OnChangesOnlyChanged(ECheckBoxState NewState);
 	ECheckBoxState GetChangesOnlyState() const;
@@ -82,6 +93,13 @@ private:
 	FString FilterString;
 	FName FocusedRowName;
 	FName FocusedColumnId;
+	FString FocusedFieldPath;
+	enum class ETableDiffViewMode : uint8
+	{
+		Grid,
+		Structure
+	};
+	ETableDiffViewMode ViewMode = ETableDiffViewMode::Grid;
 	bool bChangesOnly = false;
 	bool bLockScroll = true;
 	bool bUpdatingSelection = false;
@@ -95,6 +113,8 @@ private:
 	TSharedPtr<SListView<TSharedPtr<FTableDiffAlignedRow>>> OldListView;
 	TSharedPtr<SListView<TSharedPtr<FTableDiffAlignedRow>>> NewListView;
 	TSharedPtr<STreeView<TSharedPtr<FTableDiffEntry>>> DiffTree;
+	TSharedPtr<SWidgetSwitcher> ViewSwitcher;
+	TSharedPtr<STableDiffStructureTree> StructureTree;
 	TSharedPtr<STextBlock> SelectedChangeLabel;
 	TSharedPtr<SMultiLineEditableText> OldDetailText;
 	TSharedPtr<SMultiLineEditableText> NewDetailText;

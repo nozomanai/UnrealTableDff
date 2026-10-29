@@ -190,7 +190,7 @@ namespace TableDiffModelPrivate
 		return Result;
 	}
 
-	TSharedRef<FTableDiffEntry> MakeEntry(const FText& Label, const FText& Tooltip, const FLinearColor& Color, FName RowName, FName ColumnId, const FString& OldValue, const FString& NewValue, bool bNavigable)
+	TSharedRef<FTableDiffEntry> MakeEntry(const FText& Label, const FText& Tooltip, const FLinearColor& Color, FName RowName, FName ColumnId, const FString& OldValue, const FString& NewValue, bool bNavigable, const FString& FieldPath = FString())
 	{
 		TSharedRef<FTableDiffEntry> Entry = MakeShared<FTableDiffEntry>();
 		Entry->Label = Label;
@@ -200,6 +200,7 @@ namespace TableDiffModelPrivate
 		Entry->ColumnId = ColumnId;
 		Entry->OldValue = OldValue;
 		Entry->NewValue = NewValue;
+		Entry->FieldPath = FieldPath;
 		Entry->bNavigable = bNavigable;
 		return Entry;
 	}
@@ -381,6 +382,334 @@ namespace TableDiffModelPrivate
 			}
 			DiffProperties(OldProp, OldData, NewProp, NewData, ChildPath, ColumnId, Changes, Depth);
 		}
+	}
+
+	void FinalizeStructureNode(const TSharedRef<FTableDiffPropertyNode>& Node, bool bCompare)
+	{
+		Node->bChildDiffers = false;
+		for (const TSharedPtr<FTableDiffPropertyNode>& Child : Node->Children)
+		{
+			if (Child.IsValid() && (Child->bValueDiffers || Child->bChildDiffers))
+			{
+				Node->bChildDiffers = true;
+				break;
+			}
+		}
+
+		if (Node->Children.Num() > 0 || bCompare == false)
+		{
+			Node->bValueDiffers = false;
+			return;
+		}
+
+		Node->bValueDiffers = Node->OldValue != Node->NewValue;
+	}
+
+	TSharedRef<FTableDiffPropertyNode> BuildPropertyNode(
+		const FProperty* OldProp,
+		const uint8* OldContainer,
+		const FProperty* NewProp,
+		const uint8* NewContainer,
+		const FString& Path,
+		const FText& DisplayName,
+		FName RowName,
+		ETableDiffRowKind RowKind,
+		bool bCompare,
+		int32 Depth);
+
+	void AppendStructFields(
+		const UScriptStruct* OldStruct,
+		const uint8* OldData,
+		const UScriptStruct* NewStruct,
+		const uint8* NewData,
+		const FString& ParentPath,
+		FName RowName,
+		ETableDiffRowKind RowKind,
+		bool bCompare,
+		int32 Depth,
+		TArray<TSharedPtr<FTableDiffPropertyNode>>& OutChildren)
+	{
+		TMap<FName, const FProperty*> OldProperties;
+		TMap<FName, const FProperty*> NewProperties;
+		TArray<FName> Names;
+		CollectProperties(OldStruct, OldProperties, &Names);
+		CollectProperties(NewStruct, NewProperties, &Names);
+
+		for (const FName& Name : Names)
+		{
+			const FProperty* OldChild = OldProperties.FindRef(Name);
+			const FProperty* NewChild = NewProperties.FindRef(Name);
+			const FProperty* DisplayProp = NewChild != nullptr ? NewChild : OldChild;
+			const FString ChildPath = ParentPath + TEXT(".") + Name.ToString();
+			OutChildren.Add(BuildPropertyNode(
+				OldChild,
+				OldData,
+				NewChild,
+				NewData,
+				ChildPath,
+				MakeColumnDisplayName(DisplayProp),
+				RowName,
+				RowKind,
+				bCompare,
+				Depth));
+		}
+	}
+
+	bool IsPlainStructProperty(const FProperty* Prop)
+	{
+		if (Prop == nullptr || Prop->ArrayDim != 1)
+		{
+			return false;
+		}
+		const FStructProperty* StructProp = CastField<FStructProperty>(Prop);
+		return StructProp != nullptr && StructProp->Struct != nullptr;
+	}
+
+	bool IsDynamicArrayProperty(const FProperty* Prop)
+	{
+		return Prop != nullptr && Prop->ArrayDim == 1 && CastField<FArrayProperty>(Prop) != nullptr;
+	}
+
+	void AppendStaticArrayElements(
+		const FProperty* OldProp,
+		const uint8* OldContainer,
+		const FProperty* NewProp,
+		const uint8* NewContainer,
+		const FString& Path,
+		FName RowName,
+		ETableDiffRowKind RowKind,
+		bool bCompare,
+		int32 Depth,
+		TArray<TSharedPtr<FTableDiffPropertyNode>>& OutChildren)
+	{
+		const int32 OldCount = (OldProp != nullptr && OldContainer != nullptr) ? OldProp->ArrayDim : 0;
+		const int32 NewCount = (NewProp != nullptr && NewContainer != nullptr) ? NewProp->ArrayDim : 0;
+		const int32 Count = FMath::Max(OldCount, NewCount);
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const uint8* OldElement = Index < OldCount ? OldProp->ContainerPtrToValuePtr<uint8>(OldContainer, Index) : nullptr;
+			const uint8* NewElement = Index < NewCount ? NewProp->ContainerPtrToValuePtr<uint8>(NewContainer, Index) : nullptr;
+			TSharedRef<FTableDiffPropertyNode> Element = MakeShared<FTableDiffPropertyNode>();
+			Element->RowName = RowName;
+			Element->RowKind = RowKind;
+			Element->Path = FString::Printf(TEXT("%s[%d]"), *Path, Index);
+			Element->DisplayName = FText::FromString(FString::Printf(TEXT("[%d]"), Index));
+			Element->bOldPresent = OldElement != nullptr;
+			Element->bNewPresent = NewElement != nullptr;
+			Element->OldValue = ExportDirect(OldProp, OldElement);
+			Element->NewValue = ExportDirect(NewProp, NewElement);
+
+			const FStructProperty* OldStruct = CastField<FStructProperty>(OldProp);
+			const FStructProperty* NewStruct = CastField<FStructProperty>(NewProp);
+			const bool bOldStruct = OldStruct != nullptr && OldStruct->Struct != nullptr && OldElement != nullptr;
+			const bool bNewStruct = NewStruct != nullptr && NewStruct->Struct != nullptr && NewElement != nullptr;
+			if (Depth + 1 < 8 && (bOldStruct || bNewStruct))
+			{
+				AppendStructFields(
+					bOldStruct ? OldStruct->Struct : nullptr,
+					OldElement,
+					bNewStruct ? NewStruct->Struct : nullptr,
+					NewElement,
+					Element->Path,
+					RowName,
+					RowKind,
+					bCompare,
+					Depth + 1,
+					Element->Children);
+			}
+			FinalizeStructureNode(Element, bCompare);
+			OutChildren.Add(Element);
+		}
+	}
+
+	void AppendDynamicArrayElements(
+		const FProperty* OldProp,
+		const uint8* OldContainer,
+		const FProperty* NewProp,
+		const uint8* NewContainer,
+		const FString& Path,
+		FName RowName,
+		ETableDiffRowKind RowKind,
+		bool bCompare,
+		int32 Depth,
+		TArray<TSharedPtr<FTableDiffPropertyNode>>& OutChildren)
+	{
+		const FArrayProperty* OldArray = CastField<FArrayProperty>(OldProp);
+		const FArrayProperty* NewArray = CastField<FArrayProperty>(NewProp);
+		TUniquePtr<FScriptArrayHelper> OldHelper;
+		TUniquePtr<FScriptArrayHelper> NewHelper;
+		int32 OldCount = 0;
+		int32 NewCount = 0;
+		if (OldArray != nullptr && OldArray->Inner != nullptr && OldContainer != nullptr)
+		{
+			OldHelper = MakeUnique<FScriptArrayHelper>(OldArray, OldArray->ContainerPtrToValuePtr<void>(OldContainer));
+			OldCount = OldHelper->Num();
+		}
+		if (NewArray != nullptr && NewArray->Inner != nullptr && NewContainer != nullptr)
+		{
+			NewHelper = MakeUnique<FScriptArrayHelper>(NewArray, NewArray->ContainerPtrToValuePtr<void>(NewContainer));
+			NewCount = NewHelper->Num();
+		}
+
+		const int32 Count = FMath::Max(OldCount, NewCount);
+		for (int32 Index = 0; Index < Count; ++Index)
+		{
+			const uint8* OldElement = (OldHelper.IsValid() && Index < OldCount) ? OldHelper->GetRawPtr(Index) : nullptr;
+			const uint8* NewElement = (NewHelper.IsValid() && Index < NewCount) ? NewHelper->GetRawPtr(Index) : nullptr;
+			const FProperty* OldInner = OldArray != nullptr ? OldArray->Inner : nullptr;
+			const FProperty* NewInner = NewArray != nullptr ? NewArray->Inner : nullptr;
+			TSharedRef<FTableDiffPropertyNode> Element = MakeShared<FTableDiffPropertyNode>();
+			Element->RowName = RowName;
+			Element->RowKind = RowKind;
+			Element->Path = FString::Printf(TEXT("%s[%d]"), *Path, Index);
+			Element->DisplayName = FText::FromString(FString::Printf(TEXT("[%d]"), Index));
+			Element->bOldPresent = OldElement != nullptr;
+			Element->bNewPresent = NewElement != nullptr;
+			Element->OldValue = ExportDirect(OldInner, OldElement);
+			Element->NewValue = ExportDirect(NewInner, NewElement);
+
+			const FStructProperty* OldStruct = CastField<FStructProperty>(OldInner);
+			const FStructProperty* NewStruct = CastField<FStructProperty>(NewInner);
+			const bool bOldStruct = OldStruct != nullptr && OldStruct->Struct != nullptr && OldElement != nullptr;
+			const bool bNewStruct = NewStruct != nullptr && NewStruct->Struct != nullptr && NewElement != nullptr;
+			if (Depth + 1 < 8 && (bOldStruct || bNewStruct))
+			{
+				AppendStructFields(
+					bOldStruct ? OldStruct->Struct : nullptr,
+					OldElement,
+					bNewStruct ? NewStruct->Struct : nullptr,
+					NewElement,
+					Element->Path,
+					RowName,
+					RowKind,
+					bCompare,
+					Depth + 1,
+					Element->Children);
+			}
+			FinalizeStructureNode(Element, bCompare);
+			OutChildren.Add(Element);
+		}
+	}
+
+	TSharedRef<FTableDiffPropertyNode> BuildPropertyNode(
+		const FProperty* OldProp,
+		const uint8* OldContainer,
+		const FProperty* NewProp,
+		const uint8* NewContainer,
+		const FString& Path,
+		const FText& DisplayName,
+		FName RowName,
+		ETableDiffRowKind RowKind,
+		bool bCompare,
+		int32 Depth)
+	{
+		TSharedRef<FTableDiffPropertyNode> Node = MakeShared<FTableDiffPropertyNode>();
+		Node->RowName = RowName;
+		Node->RowKind = RowKind;
+		Node->Path = Path;
+		Node->DisplayName = DisplayName;
+		Node->bOldPresent = OldProp != nullptr && OldContainer != nullptr;
+		Node->bNewPresent = NewProp != nullptr && NewContainer != nullptr;
+		if (Node->bOldPresent)
+		{
+			Node->OldValue = MakeDisplayText(OldProp, OldContainer).ToString();
+		}
+		if (Node->bNewPresent)
+		{
+			Node->NewValue = MakeDisplayText(NewProp, NewContainer).ToString();
+		}
+
+		if (Depth < 8)
+		{
+			const bool bOldStaticArray = OldProp != nullptr && OldProp->ArrayDim > 1;
+			const bool bNewStaticArray = NewProp != nullptr && NewProp->ArrayDim > 1;
+			if (bOldStaticArray || bNewStaticArray)
+			{
+				const bool bCompatible = (bOldStaticArray == false || bNewStaticArray == false || OldProp->ArrayDim == NewProp->ArrayDim);
+				if (bCompatible)
+				{
+					AppendStaticArrayElements(OldProp, OldContainer, NewProp, NewContainer, Path, RowName, RowKind, bCompare, Depth, Node->Children);
+				}
+			}
+			else if (IsPlainStructProperty(OldProp) || IsPlainStructProperty(NewProp))
+			{
+				const bool bOldOk = OldProp == nullptr || OldContainer == nullptr || IsPlainStructProperty(OldProp);
+				const bool bNewOk = NewProp == nullptr || NewContainer == nullptr || IsPlainStructProperty(NewProp);
+				if (bOldOk && bNewOk)
+				{
+					const FStructProperty* OldStruct = CastField<FStructProperty>(OldProp);
+					const FStructProperty* NewStruct = CastField<FStructProperty>(NewProp);
+					AppendStructFields(
+						(OldStruct != nullptr && OldContainer != nullptr) ? OldStruct->Struct : nullptr,
+						(OldStruct != nullptr && OldContainer != nullptr) ? OldStruct->ContainerPtrToValuePtr<uint8>(OldContainer) : nullptr,
+						(NewStruct != nullptr && NewContainer != nullptr) ? NewStruct->Struct : nullptr,
+						(NewStruct != nullptr && NewContainer != nullptr) ? NewStruct->ContainerPtrToValuePtr<uint8>(NewContainer) : nullptr,
+						Path,
+						RowName,
+						RowKind,
+						bCompare,
+						Depth + 1,
+						Node->Children);
+				}
+			}
+			else if (IsDynamicArrayProperty(OldProp) || IsDynamicArrayProperty(NewProp))
+			{
+				const bool bOldOk = OldProp == nullptr || OldContainer == nullptr || IsDynamicArrayProperty(OldProp);
+				const bool bNewOk = NewProp == nullptr || NewContainer == nullptr || IsDynamicArrayProperty(NewProp);
+				if (bOldOk && bNewOk)
+				{
+					AppendDynamicArrayElements(OldProp, OldContainer, NewProp, NewContainer, Path, RowName, RowKind, bCompare, Depth, Node->Children);
+				}
+			}
+		}
+
+		FinalizeStructureNode(Node, bCompare);
+		return Node;
+	}
+
+	TSharedRef<FTableDiffPropertyNode> BuildRowStructureNode(
+		const FTableDiffAlignedRow& Row,
+		const TArray<FTableDiffColumn>& Columns,
+		const FTableSide& OldSide,
+		const FTableSide& NewSide,
+		const uint8* OldData,
+		const uint8* NewData,
+		bool bCompare)
+	{
+		TSharedRef<FTableDiffPropertyNode> Root = MakeShared<FTableDiffPropertyNode>();
+		Root->bIsRow = true;
+		Root->RowName = Row.RowName;
+		Root->RowKind = Row.Kind;
+		Root->DisplayName = FText::FromName(Row.RowName);
+		Root->bOldPresent = Row.OldIndex != INDEX_NONE;
+		Root->bNewPresent = Row.NewIndex != INDEX_NONE;
+
+		const uint8* OldContainer = Root->bOldPresent ? OldData : nullptr;
+		const uint8* NewContainer = Root->bNewPresent ? NewData : nullptr;
+		for (const FTableDiffColumn& Column : Columns)
+		{
+			const FProperty* OldProp = OldContainer != nullptr ? OldSide.Properties.FindRef(Column.ColumnId) : nullptr;
+			const FProperty* NewProp = NewContainer != nullptr ? NewSide.Properties.FindRef(Column.ColumnId) : nullptr;
+			if (OldProp == nullptr && NewProp == nullptr)
+			{
+				continue;
+			}
+			Root->Children.Add(BuildPropertyNode(
+				OldProp,
+				OldContainer,
+				NewProp,
+				NewContainer,
+				Column.DisplayName.ToString(),
+				Column.DisplayName,
+				Row.RowName,
+				Row.Kind,
+				bCompare,
+				0));
+		}
+
+		FinalizeStructureNode(Root, false);
+		Root->bValueDiffers = Row.Kind != ETableDiffRowKind::Unchanged;
+		return Root;
 	}
 }
 
@@ -624,10 +953,13 @@ FTableDiffResult FTableDiffModel::Build(const UDataTable* OldTable, const UDataT
 					FText::FromString(Change.Path),
 					FText::FromString(OldShown),
 					FText::FromString(NewShown));
-				Parent->Children.Add(MakeEntry(FieldLabel, FieldTip, ModifiedColor, Row->RowName, Change.ColumnId, OldShown, NewShown, true));
+				Parent->Children.Add(MakeEntry(FieldLabel, FieldTip, ModifiedColor, Row->RowName, Change.ColumnId, OldShown, NewShown, true, Change.Path));
 			}
 			RowEntries.Add(Parent);
 		}
+
+		const bool bCompareChildren = Row->Kind != ETableDiffRowKind::Added && Row->Kind != ETableDiffRowKind::Removed;
+		Row->StructureNode = BuildRowStructureNode(*Row, Result.Columns, OldSide, NewSide, OldData, NewData, bCompareChildren);
 	}
 
 	Result.Rows = MoveTemp(AlignedRows);

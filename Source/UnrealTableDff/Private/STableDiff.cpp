@@ -1,5 +1,6 @@
 #include "STableDiff.h"
 
+#include "STableDiffStructureTree.h"
 #include "TableDiffModel.h"
 #include "DiffUtils.h"
 #include "Engine/DataTable.h"
@@ -12,6 +13,7 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
 #include "Widgets/Layout/SSplitter.h"
@@ -225,6 +227,27 @@ void STableDiff::Construct(const FArguments& InArgs)
 		LOCTEXT("LockScrollTip", "Scroll the history and current tables together"),
 		FSlateIcon(),
 		EUserInterfaceActionType::ToggleButton);
+	NavToolBar.AddSeparator();
+	NavToolBar.AddToolBarButton(
+		FUIAction(
+			FExecuteAction::CreateSP(this, &STableDiff::ShowGridView),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateSP(this, &STableDiff::IsGridView)),
+		NAME_None,
+		LOCTEXT("GridView", "Grid"),
+		LOCTEXT("GridViewTip", "Show both revisions as side-by-side data table grids"),
+		FSlateIcon(),
+		EUserInterfaceActionType::ToggleButton);
+	NavToolBar.AddToolBarButton(
+		FUIAction(
+			FExecuteAction::CreateSP(this, &STableDiff::ShowStructureView),
+			FCanExecuteAction(),
+			FIsActionChecked::CreateSP(this, &STableDiff::IsStructureView)),
+		NAME_None,
+		LOCTEXT("StructureView", "Structure"),
+		LOCTEXT("StructureViewTip", "Show each row struct as an expandable tree and highlight differences"),
+		FSlateIcon(),
+		EUserInterfaceActionType::ToggleButton);
 
 	ChildSlot
 	[
@@ -313,14 +336,27 @@ void STableDiff::Construct(const FArguments& InArgs)
 					]
 				]
 				+ SSplitter::Slot()
-				.Value(0.37f)
+				.Value(0.74f)
 				[
-					MakeTablePanel(ETableDiffSide::Old, OldTitle)
-				]
-				+ SSplitter::Slot()
-				.Value(0.37f)
-				[
-					MakeTablePanel(ETableDiffSide::New, NewTitle)
+					SAssignNew(ViewSwitcher, SWidgetSwitcher)
+					+ SWidgetSwitcher::Slot()
+					[
+						SNew(SSplitter)
+						+ SSplitter::Slot()
+						[
+							MakeTablePanel(ETableDiffSide::Old, OldTitle)
+						]
+						+ SSplitter::Slot()
+						[
+							MakeTablePanel(ETableDiffSide::New, NewTitle)
+						]
+					]
+					+ SWidgetSwitcher::Slot()
+					[
+						SAssignNew(StructureTree, STableDiffStructureTree)
+						.Rows(&Result.Rows)
+						.OnNodeSelected(this, &STableDiff::OnStructureNodeSelected)
+					]
 				]
 			]
 			+ SVerticalBox::Slot()
@@ -406,6 +442,10 @@ void STableDiff::Construct(const FArguments& InArgs)
 		{
 			DiffTree->SetItemExpansion(Entry, true);
 		}
+	}
+	if (StructureTree.IsValid())
+	{
+		StructureTree->Refresh(FilterString, bChangesOnly);
 	}
 }
 
@@ -695,8 +735,13 @@ void STableDiff::OnDiffSelectionChanged(TSharedPtr<FTableDiffEntry> Item, ESelec
 	bUpdatingSelection = true;
 	FocusedRowName = Item->RowName;
 	FocusedColumnId = Item->ColumnId;
+	FocusedFieldPath = Item->FieldPath;
 	SetDetailText(Item->Label, Item->OldValue, Item->NewValue);
 	ScrollTablesToRow(Item->RowName);
+	if (StructureTree.IsValid())
+	{
+		StructureTree->Reveal(Item->RowName, Item->FieldPath);
+	}
 	bUpdatingSelection = false;
 }
 
@@ -789,6 +834,14 @@ void STableDiff::RefreshFilteredViews()
 			DiffTree->SetItemExpansion(Entry, true);
 		}
 	}
+	if (StructureTree.IsValid())
+	{
+		StructureTree->Refresh(FilterString, bChangesOnly);
+		if (FocusedRowName.IsNone() == false || FocusedFieldPath.IsEmpty() == false)
+		{
+			StructureTree->Reveal(FocusedRowName, FocusedFieldPath);
+		}
+	}
 }
 
 bool STableDiff::PassesRowFilter(const TSharedPtr<FTableDiffAlignedRow>& Row) const
@@ -845,6 +898,100 @@ bool STableDiff::EntryMatches(const TSharedPtr<FTableDiffEntry>& Entry) const
 		}
 	}
 	return false;
+}
+
+void STableDiff::ShowGridView()
+{
+	ViewMode = ETableDiffViewMode::Grid;
+	if (ViewSwitcher.IsValid())
+	{
+		ViewSwitcher->SetActiveWidgetIndex(0);
+	}
+}
+
+void STableDiff::ShowStructureView()
+{
+	ViewMode = ETableDiffViewMode::Structure;
+	if (ViewSwitcher.IsValid())
+	{
+		ViewSwitcher->SetActiveWidgetIndex(1);
+	}
+	if (StructureTree.IsValid())
+	{
+		StructureTree->Refresh(FilterString, bChangesOnly);
+		if (FocusedRowName.IsNone() == false || FocusedFieldPath.IsEmpty() == false)
+		{
+			StructureTree->Reveal(FocusedRowName, FocusedFieldPath);
+		}
+	}
+}
+
+bool STableDiff::IsGridView() const
+{
+	return ViewMode == ETableDiffViewMode::Grid;
+}
+
+bool STableDiff::IsStructureView() const
+{
+	return ViewMode == ETableDiffViewMode::Structure;
+}
+
+void STableDiff::OnStructureNodeSelected(TSharedPtr<FTableDiffPropertyNode> Node)
+{
+	if (bUpdatingSelection || Node.IsValid() == false)
+	{
+		return;
+	}
+
+	bUpdatingSelection = true;
+	FocusedRowName = Node->RowName;
+	FocusedFieldPath = Node->Path;
+	FocusedColumnId = NAME_None;
+	const FText Label = Node->bIsRow
+		? FText::Format(LOCTEXT("StructureRow", "Row {0}"), Node->DisplayName)
+		: Node->DisplayName;
+	SetDetailText(Label, Node->OldValue, Node->NewValue);
+	SelectDiffForField(Node->RowName, Node->Path);
+	ScrollTablesToRow(Node->RowName);
+	bUpdatingSelection = false;
+}
+
+void STableDiff::SelectDiffForField(FName RowName, const FString& FieldPath)
+{
+	if (DiffTree.IsValid() == false)
+	{
+		return;
+	}
+
+	TArray<TSharedPtr<FTableDiffEntry>> Navigable;
+	CollectNavigable(VisibleDiffs, Navigable);
+	TSharedPtr<FTableDiffEntry> RowFallback;
+	for (const TSharedPtr<FTableDiffEntry>& Entry : Navigable)
+	{
+		if (Entry.IsValid() == false || Entry->RowName != RowName)
+		{
+			continue;
+		}
+		if (Entry->FieldPath == FieldPath)
+		{
+			DiffTree->SetSelection(Entry, ESelectInfo::Direct);
+			DiffTree->RequestScrollIntoView(Entry);
+			return;
+		}
+		if (RowFallback.IsValid() == false && Entry->FieldPath.IsEmpty())
+		{
+			RowFallback = Entry;
+		}
+	}
+
+	if (FieldPath.IsEmpty() && RowFallback.IsValid())
+	{
+		DiffTree->SetSelection(RowFallback, ESelectInfo::Direct);
+		DiffTree->RequestScrollIntoView(RowFallback);
+		return;
+	}
+
+	DiffTree->ClearSelection();
 }
 
 void STableDiff::PrevDiff()

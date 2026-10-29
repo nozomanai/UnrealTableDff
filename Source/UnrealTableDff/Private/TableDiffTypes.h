@@ -35,6 +35,23 @@ enum class ETableDiffSide : uint8
 	New
 };
 
+class FTableDiffPropertyNode
+{
+public:
+	FName RowName;
+	FString Path;
+	FText DisplayName;
+	FString OldValue;
+	FString NewValue;
+	bool bIsRow = false;
+	bool bValueDiffers = false;
+	bool bChildDiffers = false;
+	bool bOldPresent = false;
+	bool bNewPresent = false;
+	ETableDiffRowKind RowKind = ETableDiffRowKind::Unchanged;
+	TArray<TSharedPtr<FTableDiffPropertyNode>> Children;
+};
+
 class FTableDiffAlignedRow
 {
 public:
@@ -43,6 +60,7 @@ public:
 	int32 NewIndex = INDEX_NONE;
 	ETableDiffRowKind Kind = ETableDiffRowKind::Unchanged;
 	TMap<FName, FTableDiffCell> Cells;
+	TSharedPtr<FTableDiffPropertyNode> StructureNode;
 };
 
 class FTableDiffEntry
@@ -55,6 +73,7 @@ public:
 	FName ColumnId = NAME_None;
 	FString OldValue;
 	FString NewValue;
+	FString FieldPath;
 	bool bNavigable = false;
 	TArray<TSharedPtr<FTableDiffEntry>> Children;
 };
