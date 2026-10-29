@@ -298,7 +298,7 @@ TSharedRef<SWidget> STableDiffStructureTree::MakeCell(TSharedPtr<FTableDiffPrope
 		Tooltip = Text;
 	}
 
-	TWeakPtr<STableDiffStructureTree> WeakThis = SharedThis(this);
+	TWeakPtr<STableDiffStructureTree> WeakPtr = SharedThis(this);
 	const TSharedPtr<FTableDiffPropertyNode> NodePtr = Node;
 	FLinearColor TextColor = FLinearColor::White;
 	if (Node->RowKind == ETableDiffRowKind::Added)
@@ -316,9 +316,9 @@ TSharedRef<SWidget> STableDiffStructureTree::MakeCell(TSharedPtr<FTableDiffPrope
 
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
-		.BorderBackgroundColor_Lambda([WeakThis, NodePtr, ColumnId]()
+		.BorderBackgroundColor_Lambda([WeakPtr, NodePtr, ColumnId]()
 		{
-			if (TSharedPtr<STableDiffStructureTree> Tree = WeakThis.Pin())
+			if (TSharedPtr<STableDiffStructureTree> Tree = WeakPtr.Pin())
 			{
 				return Tree->GetCellBackground(NodePtr, ColumnId);
 			}

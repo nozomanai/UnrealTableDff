@@ -531,13 +531,13 @@ TSharedRef<SWidget> STableDiff::MakeCellWidget(TSharedPtr<FTableDiffAlignedRow> 
 		}
 	}
 
-	TWeakPtr<STableDiff> WeakThis = SharedThis(this);
+	TWeakPtr<STableDiff> WeakPtr = SharedThis(this);
 	const TSharedPtr<FTableDiffAlignedRow> RowPtr = Row;
 	return SNew(SBorder)
 		.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
-		.BorderBackgroundColor_Lambda([WeakThis, RowPtr, HeaderId, Side]()
+		.BorderBackgroundColor_Lambda([WeakPtr, RowPtr, HeaderId, Side]()
 		{
-			if (TSharedPtr<STableDiff> Diff = WeakThis.Pin())
+			if (TSharedPtr<STableDiff> Diff = WeakPtr.Pin())
 			{
 				return Diff->GetCellBackground(RowPtr, HeaderId, Side);
 			}
