@@ -1,0 +1,21 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "Table Diff",
+	"Description": "Right-click a Data Table and diff it against Perforce or Git history in an editor view similar to Blueprint diff.",
+	"Category": "Editor",
+	"CreatedBy": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"EnabledByDefault": true,
+	"Modules": [
+		{
+			"Name": "UnrealTableDff",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}
