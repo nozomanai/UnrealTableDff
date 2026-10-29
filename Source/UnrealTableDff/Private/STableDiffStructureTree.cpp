@@ -2,12 +2,31 @@
 
 #include "Styling/AppStyle.h"
 #include "Widgets/Layout/SBorder.h"
-#include "Widgets/SNullWidget.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/Layout/SScrollBar.h"
+#include "Widgets/Layout/SScrollBox.h"
+#include "Widgets/Layout/SSpacer.h"
 #include "Widgets/SBoxPanel.h"
+#include "Widgets/SNullWidget.h"
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SExpanderArrow.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Views/STableRow.h"
+
+class STableDiffTreeView : public STreeView<TSharedPtr<FTableDiffPropertyNode>>
+{
+public:
+	using FArguments = STreeView<TSharedPtr<FTableDiffPropertyNode>>::FArguments;
+
+	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		if (MouseEvent.IsShiftDown())
+		{
+			return FReply::Unhandled();
+		}
+		return STreeView<TSharedPtr<FTableDiffPropertyNode>>::OnMouseWheel(MyGeometry, MouseEvent);
+	}
+};
 
 #define LOCTEXT_NAMESPACE "STableDiffStructureTree"
 
@@ -69,6 +88,17 @@ void STableDiffStructureTree::Construct(const FArguments& InArgs)
 	Rows = InArgs._Rows;
 	OnNodeSelected = InArgs._OnNodeSelected;
 
+	const TSharedRef<SScrollBar> VerticalScrollBar = SNew(SScrollBar)
+		.Orientation(Orient_Vertical)
+		.AlwaysShowScrollbar(true)
+		.AlwaysShowScrollbarTrack(true)
+		.Thickness(FVector2D(12.f, 12.f));
+	const TSharedRef<SScrollBar> HorizontalScrollBar = SNew(SScrollBar)
+		.Orientation(Orient_Horizontal)
+		.AlwaysShowScrollbar(true)
+		.AlwaysShowScrollbarTrack(true)
+		.Thickness(FVector2D(12.f, 12.f));
+
 	TSharedRef<SHeaderRow> Header = SNew(SHeaderRow)
 		+ SHeaderRow::Column(TableDiffStructureColumns::Name)
 		.DefaultLabel(LOCTEXT("Property", "Property"))
@@ -76,10 +106,12 @@ void STableDiffStructureTree::Construct(const FArguments& InArgs)
 		.OnWidthChanged(FOnWidthChanged::CreateLambda([this](float NewWidth) { NameColumnWidth = FMath::Max(NewWidth, 120.f); }))
 		+ SHeaderRow::Column(TableDiffStructureColumns::History)
 		.DefaultLabel(LOCTEXT("History", "History"))
-		.FillWidth(1.f)
+		.ManualWidth(TAttribute<float>::CreateLambda([this]() { return HistoryColumnWidth; }))
+		.OnWidthChanged(FOnWidthChanged::CreateLambda([this](float NewWidth) { HistoryColumnWidth = FMath::Max(NewWidth, 160.f); }))
 		+ SHeaderRow::Column(TableDiffStructureColumns::Current)
 		.DefaultLabel(LOCTEXT("Current", "Current"))
-		.FillWidth(1.f);
+		.ManualWidth(TAttribute<float>::CreateLambda([this]() { return CurrentColumnWidth; }))
+		.OnWidthChanged(FOnWidthChanged::CreateLambda([this](float NewWidth) { CurrentColumnWidth = FMath::Max(NewWidth, 160.f); }));
 
 	ChildSlot
 	[
@@ -87,15 +119,64 @@ void STableDiffStructureTree::Construct(const FArguments& InArgs)
 		.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
 		.Padding(0.f)
 		[
-			SAssignNew(TreeView, STreeView<TSharedPtr<FTableDiffPropertyNode>>)
-			.TreeItemsSource(&VisibleRoots)
-			.OnGenerateRow(this, &STableDiffStructureTree::OnGenerateRow)
-			.OnGetChildren(this, &STableDiffStructureTree::OnGetChildren)
-			.OnSelectionChanged(this, &STableDiffStructureTree::OnSelectionChanged)
-			.SelectionMode(ESelectionMode::Single)
-			.HeaderRow(Header)
+			SNew(SVerticalBox)
+			+ SVerticalBox::Slot()
+			.FillHeight(1.f)
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.f)
+				[
+					SNew(SScrollBox)
+					.Orientation(Orient_Horizontal)
+					.ConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible)
+					.ExternalScrollbar(HorizontalScrollBar)
+					+ SScrollBox::Slot()
+					[
+						SNew(SBox)
+						.MinDesiredWidth_Lambda([this]() { return FOptionalSize(GetContentWidth()); })
+						[
+							SAssignNew(TreeView, STableDiffTreeView)
+							.TreeItemsSource(&VisibleRoots)
+							.OnGenerateRow(this, &STableDiffStructureTree::OnGenerateRow)
+							.OnGetChildren(this, &STableDiffStructureTree::OnGetChildren)
+							.OnSelectionChanged(this, &STableDiffStructureTree::OnSelectionChanged)
+							.SelectionMode(ESelectionMode::Single)
+							.ExternalScrollbar(VerticalScrollBar)
+							.ConsumeMouseWheel(EConsumeMouseWheel::Always)
+							.HeaderRow(Header)
+						]
+					]
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					VerticalScrollBar
+				]
+			]
+			+ SVerticalBox::Slot()
+			.AutoHeight()
+			[
+				SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.FillWidth(1.f)
+				[
+					HorizontalScrollBar
+				]
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				[
+					SNew(SSpacer)
+					.Size(FVector2D(12.f, 12.f))
+				]
+			]
 		]
 	];
+}
+
+float STableDiffStructureTree::GetContentWidth() const
+{
+	return NameColumnWidth + HistoryColumnWidth + CurrentColumnWidth;
 }
 
 void STableDiffStructureTree::Refresh(const FString& InFilterText, bool bInChangesOnly)

@@ -45,4 +45,8 @@ private:
 	bool bUseFilter = false;
 	bool bApplyingReveal = false;
 	float NameColumnWidth = 280.f;
+	float HistoryColumnWidth = 420.f;
+	float CurrentColumnWidth = 420.f;
+
+	float GetContentWidth() const;
 };

@@ -9,6 +9,7 @@
 #include "Widgets/Views/STreeView.h"
 
 class FTableDiffPropertyNode;
+class SScrollBar;
 class STableDiffStructureTree;
 class SWidgetSwitcher;
 
@@ -81,6 +82,8 @@ private:
 	bool IsLockScrollChecked() const;
 	float GetRowNameColumnWidth() const;
 	float GetPropertyColumnWidth(int32 ColumnIndex) const;
+	float GetGridContentWidth() const;
+	TSharedRef<SWidget> WrapTableWithScrollBars(const TSharedRef<SListView<TSharedPtr<FTableDiffAlignedRow>>>& ListView, const TSharedRef<SScrollBar>& VerticalScrollBar) const;
 	void OnRowNameColumnResized(float NewWidth);
 	void OnPropertyColumnResized(float NewWidth, int32 ColumnIndex);
 	const FTableDiffColumn* FindColumnByHeader(FName HeaderId) const;

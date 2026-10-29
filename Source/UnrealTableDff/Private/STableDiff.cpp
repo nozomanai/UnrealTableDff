@@ -13,6 +13,8 @@
 #include "Widgets/Input/SCheckBox.h"
 #include "Widgets/Input/SSearchBox.h"
 #include "Widgets/Layout/SBorder.h"
+#include "Widgets/Layout/SScrollBar.h"
+#include "Widgets/Layout/SSpacer.h"
 #include "Widgets/Layout/SWidgetSwitcher.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SScrollBox.h"
@@ -24,6 +26,21 @@
 #include "Widgets/Text/STextBlock.h"
 #include "Widgets/Views/SHeaderRow.h"
 #include "Widgets/Views/STableRow.h"
+
+class STableDiffListView : public SListView<TSharedPtr<FTableDiffAlignedRow>>
+{
+public:
+	using FArguments = SListView<TSharedPtr<FTableDiffAlignedRow>>::FArguments;
+
+	virtual FReply OnMouseWheel(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override
+	{
+		if (MouseEvent.IsShiftDown())
+		{
+			return FReply::Unhandled();
+		}
+		return SListView<TSharedPtr<FTableDiffAlignedRow>>::OnMouseWheel(MyGeometry, MouseEvent);
+	}
+};
 
 #define LOCTEXT_NAMESPACE "STableDiff"
 
@@ -621,36 +638,101 @@ TSharedRef<SHeaderRow> STableDiff::MakeHeaderRow()
 	return Header;
 }
 
+float STableDiff::GetGridContentWidth() const
+{
+	float Width = 48.f + Result.RowNameWidth;
+	for (const FTableDiffColumn& Column : Result.Columns)
+	{
+		Width += Column.Width;
+	}
+	return Width;
+}
+
+TSharedRef<SWidget> STableDiff::WrapTableWithScrollBars(const TSharedRef<SListView<TSharedPtr<FTableDiffAlignedRow>>>& ListView, const TSharedRef<SScrollBar>& VerticalScrollBar) const
+{
+	const TSharedRef<SScrollBar> HorizontalScrollBar = SNew(SScrollBar)
+		.Orientation(Orient_Horizontal)
+		.AlwaysShowScrollbar(true)
+		.AlwaysShowScrollbarTrack(true)
+		.Thickness(FVector2D(12.f, 12.f));
+
+	return SNew(SVerticalBox)
+		+ SVerticalBox::Slot()
+		.FillHeight(1.f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.f)
+			[
+				SNew(SScrollBox)
+				.Orientation(Orient_Horizontal)
+				.ConsumeMouseWheel(EConsumeMouseWheel::WhenScrollingPossible)
+				.ExternalScrollbar(HorizontalScrollBar)
+				+ SScrollBox::Slot()
+				[
+					SNew(SBox)
+					.MinDesiredWidth_Lambda([this]() { return FOptionalSize(GetGridContentWidth()); })
+					[
+						ListView
+					]
+				]
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				VerticalScrollBar
+			]
+		]
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.f)
+			[
+				HorizontalScrollBar
+			]
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			[
+				SNew(SSpacer)
+				.Size(FVector2D(12.f, 12.f))
+			]
+		];
+}
+
 TSharedRef<SWidget> STableDiff::MakeTablePanel(ETableDiffSide Side, const FText& Title)
 {
+	const TSharedRef<SScrollBar> VerticalScrollBar = SNew(SScrollBar)
+		.Orientation(Orient_Vertical)
+		.AlwaysShowScrollbar(true)
+		.AlwaysShowScrollbarTrack(true)
+		.Thickness(FVector2D(12.f, 12.f));
+
+	TSharedPtr<SListView<TSharedPtr<FTableDiffAlignedRow>>> ListView;
 	if (Side == ETableDiffSide::Old)
 	{
-		return SNew(SVerticalBox)
-			+ SVerticalBox::Slot()
-			.AutoHeight()
-			.Padding(8.f, 6.f, 8.f, 4.f)
-			[
-				SNew(STextBlock)
-				.Text(Title)
-				.Font(FAppStyle::GetFontStyle("NormalFontBold"))
-				.AutoWrapText(true)
-			]
-			+ SVerticalBox::Slot()
-			.FillHeight(1.f)
-			[
-				SNew(SBorder)
-				.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
-				.Padding(0.f)
-				[
-					SAssignNew(OldListView, SListView<TSharedPtr<FTableDiffAlignedRow>>)
-					.ListItemsSource(&VisibleRows)
-					.OnGenerateRow(this, &STableDiff::OnGenerateOldRow)
-					.OnSelectionChanged(this, &STableDiff::OnOldSelectionChanged)
-					.HeaderRow(MakeHeaderRow())
-					.SelectionMode(ESelectionMode::Single)
-					.AllowOverscroll(EAllowOverscroll::No)
-				]
-			];
+		ListView = SAssignNew(OldListView, STableDiffListView)
+			.ListItemsSource(&VisibleRows)
+			.OnGenerateRow(this, &STableDiff::OnGenerateOldRow)
+			.OnSelectionChanged(this, &STableDiff::OnOldSelectionChanged)
+			.HeaderRow(MakeHeaderRow())
+			.ExternalScrollbar(VerticalScrollBar)
+			.ConsumeMouseWheel(EConsumeMouseWheel::Always)
+			.SelectionMode(ESelectionMode::Single)
+			.AllowOverscroll(EAllowOverscroll::No);
+	}
+	else
+	{
+		ListView = SAssignNew(NewListView, STableDiffListView)
+			.ListItemsSource(&VisibleRows)
+			.OnGenerateRow(this, &STableDiff::OnGenerateNewRow)
+			.OnSelectionChanged(this, &STableDiff::OnNewSelectionChanged)
+			.HeaderRow(MakeHeaderRow())
+			.ExternalScrollbar(VerticalScrollBar)
+			.ConsumeMouseWheel(EConsumeMouseWheel::Always)
+			.SelectionMode(ESelectionMode::Single)
+			.AllowOverscroll(EAllowOverscroll::No);
 	}
 
 	return SNew(SVerticalBox)
@@ -670,13 +752,7 @@ TSharedRef<SWidget> STableDiff::MakeTablePanel(ETableDiffSide Side, const FText&
 			.BorderImage(FAppStyle::GetBrush("ToolPanel.GroupBorder"))
 			.Padding(0.f)
 			[
-				SAssignNew(NewListView, SListView<TSharedPtr<FTableDiffAlignedRow>>)
-				.ListItemsSource(&VisibleRows)
-				.OnGenerateRow(this, &STableDiff::OnGenerateNewRow)
-				.OnSelectionChanged(this, &STableDiff::OnNewSelectionChanged)
-				.HeaderRow(MakeHeaderRow())
-				.SelectionMode(ESelectionMode::Single)
-				.AllowOverscroll(EAllowOverscroll::No)
+				WrapTableWithScrollBars(ListView.ToSharedRef(), VerticalScrollBar)
 			]
 		];
 }
